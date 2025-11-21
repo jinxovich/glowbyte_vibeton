@@ -1,0 +1,46 @@
+# Python / FastAPI
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+*.sqlite3
+
+# Model artifacts & datasets
+ML/artifacts/models/
+ML/artifacts/datasets/
+ML/artifacts/prediction_history.json
+ML/artifacts/training_metrics.json
+
+# Data uploads / outputs
+data/uploads/
+data/**/*.parquet
+data/**/*.feather
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/.eslintcache
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+.env.*
+.python-version
