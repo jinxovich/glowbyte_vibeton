@@ -112,8 +112,6 @@ CSV Files → DataPreprocessor → FeatureEngineer → XGBoost Model → Predict
 ### Требования
 
 - **Python**: 3.11+ (рекомендуется Python 3.11 или 3.12)
-- **RAM**: 4 GB минимум
-- **Disk**: 1 GB для данных и моделей
 
 ### Шаг 1: Клонировать репозиторий
 
