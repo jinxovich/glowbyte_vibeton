@@ -31,4 +31,3 @@ def predict_endpoint(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return [PredictionResponse(**item) for item in predictions]
-

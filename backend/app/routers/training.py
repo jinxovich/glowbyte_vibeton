@@ -28,4 +28,3 @@ def history_endpoint(predictor=Depends(get_predictor)) -> HistoryResponse:
     raw_history = read_prediction_history()
     predictions = [PredictionResponse(**item) for item in raw_history]
     return HistoryResponse(metrics=metrics, predictions=predictions)
-

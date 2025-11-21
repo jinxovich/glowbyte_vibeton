@@ -1,16 +1,37 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react-swc";
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   server: {
-    port: 5173,
+    port: 3000,
     proxy: {
-      "/api": {
-        target: process.env.VITE_API_URL ?? "http://localhost:8000",
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/health': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/predict': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/train': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/history': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
       },
     },
   },
-});
-
+})

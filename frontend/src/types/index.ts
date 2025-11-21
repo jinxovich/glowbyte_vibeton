@@ -1,44 +1,72 @@
-export type UploadDataset = "supplies" | "temperature" | "weather" | "fires" | "current";
-
-export type PredictionPayload = {
+export interface PredictionRequest {
   storage_id: string;
   stack_id: string;
   measurement_date: string;
   max_temperature: number;
-  pile_age_days?: number | null;
-  stack_mass_tons?: number | null;
-  weather_temp?: number | null;
-  weather_humidity?: number | null;
-  weather_pressure?: number | null;
-  weather_precipitation?: number | null;
-  weather_wind_avg?: number | null;
-  weather_cloudcover?: number | null;
-};
+  pile_age_days?: number;
+  stack_mass_tons?: number;
+  weather_humidity?: number;
+  weather_temp?: number;
+}
 
-export type PredictionResponse = {
+export interface PredictionResponse {
   storage_id: string;
   stack_id: string;
   measurement_date: string;
   predicted_ttf_days: number;
   predicted_combustion_date: string;
-};
+  confidence: number;
+  risk_level: RiskLevel;
+  max_temperature: number;
+}
 
-export type MetricsSnapshot = {
-  train_mae?: number;
-  test_mae?: number;
-  accuracy_within_2_days?: number;
-  dataset_size?: number;
-  generated_at?: string;
-  [key: string]: unknown;
-};
+export type RiskLevel = 'критический' | 'высокий' | 'средний' | 'низкий' | 'минимальный';
 
-export type HistoryResponse = {
-  metrics: MetricsSnapshot;
-  predictions: PredictionResponse[];
-};
+export interface Metrics {
+  accuracy_2days: number;
+  mae: number;
+  rmse: number;
+  kpi_achieved: boolean;
+  total_predictions?: number;
+  trained_at?: string;
+}
 
-export type TrainResponse = {
-  status: "ok";
-  metrics: MetricsSnapshot;
-};
+export interface DashboardData {
+  metrics: Metrics;
+  statistics: {
+    total_predictions: number;
+    risk_distribution: Record<RiskLevel, number>;
+    storages: Record<string, number>;
+    at_risk_count: number;
+  };
+  upcoming_fires: UpcomingFire[];
+  trained_at?: string;
+}
+
+export interface UpcomingFire {
+  storage_id: string;
+  stack_id: string;
+  date: string;
+  days_until: number;
+  risk_level: RiskLevel;
+  confidence: number;
+}
+
+export interface CalendarItem {
+  date: string;
+  count: number;
+  risk_level: RiskLevel;
+  stockpiles: Array<{
+    storage_id: string;
+    stack_id: string;
+    confidence: number;
+  }>;
+}
+
+export interface HealthResponse {
+  status: string;
+  model_loaded: boolean;
+  model_path: string;
+  data_dir: string;
+}
 

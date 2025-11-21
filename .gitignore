@@ -1,46 +1,74 @@
-# Python / FastAPI
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
 .venv/
 venv/
+ENV/
 env/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-*.log
-*.sqlite3
 
-# Model artifacts & datasets
-ML/artifacts/models/
-ML/artifacts/datasets/
-ML/artifacts/prediction_history.json
-ML/artifacts/training_metrics.json
+# ML Artifacts
+ML/artifacts/models/*.pkl
+ML/artifacts/*.json
+ML/artifacts/datasets/*.parquet
 
-# Data uploads / outputs
-data/uploads/
-data/**/*.parquet
-data/**/*.feather
-
-# Node / Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/*.tsbuildinfo
-frontend/.eslintcache
-
-# IDE / OS
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
+*~
+
+# OS
 .DS_Store
 Thumbs.db
 
-# Env / secrets
+# Logs
+*.log
+
+# Data (keep structure but ignore uploads)
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Environment
 .env
 .env.local
-.env.*
-.python-version
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary
+*.tmp
+*.bak

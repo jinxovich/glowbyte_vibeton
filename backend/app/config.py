@@ -1,44 +1,54 @@
-"""Конфигурация проекта и пути к данным."""
+"""Configuration for the application."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from functools import lru_cache
+import os
 from pathlib import Path
-from typing import Tuple
+from functools import lru_cache
+from pydantic_settings import BaseSettings
 
 
-@dataclass(frozen=True)
-class ProjectConfig:
-    """Настройки путей и CORS."""
-
-    project_root: Path
-    data_dir: Path
-    artifacts_dir: Path
-    uploads_dir: Path
-    allowed_origins: Tuple[str, ...] = ("*",)
-
+class Settings(BaseSettings):
+    """Application settings."""
+    
+    # Paths
+    project_root: Path = Path(__file__).parent.parent.parent
+    data_dir: Path = project_root / "data"
+    artifacts_dir: Path = project_root / "ML" / "artifacts"
+    
+    # API settings
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    reload: bool = True
+    
+    # Model settings
+    model_name: str = "coal_fire_model.pkl"
+    
+    @property
+    def model_path(self) -> Path:
+        """Get model path."""
+        return self.artifacts_dir / "models" / self.model_name
+    
+    @property
+    def metrics_path(self) -> Path:
+        """Get metrics path."""
+        return self.artifacts_dir / "training_metrics.json"
+    
     @property
     def history_path(self) -> Path:
+        """Get prediction history path."""
         return self.artifacts_dir / "prediction_history.json"
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
-@lru_cache(maxsize=1)
-def get_config() -> ProjectConfig:
-    """Возвращает singleton конфигурации проекта."""
-    project_root = Path(__file__).resolve().parents[2]
-    data_dir = project_root / "data"
-    artifacts_dir = project_root / "ML" / "artifacts"
-    uploads_dir = data_dir / "uploads"
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    return ProjectConfig(
-        project_root=project_root,
-        data_dir=data_dir,
-        artifacts_dir=artifacts_dir,
-        uploads_dir=uploads_dir,
-    )
+@lru_cache()
+def get_config() -> Settings:
+    """Get cached settings instance."""
+    return Settings()
 
 
-__all__ = ["ProjectConfig", "get_config"]
+__all__ = ["Settings", "get_config"]
 

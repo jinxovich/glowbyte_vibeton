@@ -1,43 +1,61 @@
-import axios from "axios";
+import axios from 'axios';
 import type {
-  HistoryResponse,
-  PredictionPayload,
+  PredictionRequest,
   PredictionResponse,
-  TrainResponse,
-  UploadDataset,
-} from "../types";
+  Metrics,
+  DashboardData,
+  CalendarItem,
+  HealthResponse,
+} from '../types';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000",
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
+  headers: {
+    'Content-Type': 'application/json',
+  },
 });
 
-export async function uploadDataset(dataset: UploadDataset, file: File) {
-  const formData = new FormData();
-  formData.append("file", file);
-  const response = await api.post<{ stored_as: string }>(
-    `/upload?dataset=${dataset}`,
-    formData,
-    { headers: { "Content-Type": "multipart/form-data" } },
-  );
-  return response.data;
-}
+export const healthCheck = async (): Promise<HealthResponse> => {
+  const { data } = await api.get('/health');
+  return data;
+};
 
-export async function trainModel(): Promise<TrainResponse> {
-  const response = await api.post<TrainResponse>("/train", { force: true });
-  return response.data;
-}
+export const predict = async (
+  records: PredictionRequest[]
+): Promise<PredictionResponse[]> => {
+  const { data } = await api.post('/predict', { records });
+  return data;
+};
 
-export async function predictStacks(
-  payload: PredictionPayload,
-): Promise<PredictionResponse[]> {
-  const response = await api.post<PredictionResponse[]>("/predict", {
-    records: [payload],
-  });
-  return response.data;
-}
+export const trainModel = async (force: boolean = false) => {
+  const { data } = await api.post('/train', { force });
+  return data;
+};
 
-export async function fetchHistory(): Promise<HistoryResponse> {
-  const response = await api.get<HistoryResponse>("/history");
-  return response.data;
-}
+export const getHistory = async () => {
+  const { data } = await api.get('/history');
+  return data;
+};
+
+export const getMetrics = async (): Promise<Metrics> => {
+  const { data } = await api.get('/api/metrics');
+  return data;
+};
+
+export const getDashboard = async (): Promise<DashboardData> => {
+  const { data } = await api.get('/api/dashboard');
+  return data;
+};
+
+export const getCalendar = async (): Promise<CalendarItem[]> => {
+  const { data } = await api.get('/api/calendar');
+  return data;
+};
+
+export const getStockpileDetails = async (storageId: string, stackId: string) => {
+  const { data } = await api.get(`/api/stockpile/${storageId}/${stackId}`);
+  return data;
+};
+
+export default api;
 
