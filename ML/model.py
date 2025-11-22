@@ -17,22 +17,21 @@ class CoalFireModel:
     def __init__(self, model_params: Optional[Dict[str, Any]] = None):
         """Инициализация модели."""
         if model_params is None:
-            # МАКСИМАЛЬНОЕ КАЧЕСТВО (CPU MODE)
+            # ОПТИМИЗИРОВАННЫЕ ПАРАМЕТРЫ (СБАЛАНСИРОВАННАЯ РЕГУЛЯРИЗАЦИЯ)
             model_params = {
-                'n_estimators': 1000,
-                'learning_rate': 0.01,
-                'max_depth': 5,
-                'min_child_weight': 2,
-                'subsample': 0.8,
-                'colsample_bytree': 0.8,
-                'gamma': 0.1,
-                'reg_lambda': 2.0,
+                'n_estimators': 700,  # Компромисс между 500 и 1000
+                'learning_rate': 0.03,  # Немного выше для быстрого обучения
+                'max_depth': 6,  # Компромисс между 4 и 8
+                'min_child_weight': 3,  # Компромисс между 2 и 5
+                'subsample': 0.75,  # Компромисс между 0.7 и 0.8
+                'colsample_bytree': 0.75,  # Компромисс
+                'gamma': 0.2,  # Умеренная регуляризация
+                'reg_lambda': 5.0,  # Средняя L2 регуляризация
+                'reg_alpha': 0.5,  # Легкая L1 регуляризация
                 'random_state': 42,
                 'n_jobs': -1,
                 'objective': 'reg:squarederror',
-                'eval_metric': 'rmse',
-                # ВАЖНО: Перенесли early_stopping сюда (для новых версий XGBoost)
-                'early_stopping_rounds': 50 
+                'eval_metric': 'rmse'
             }
         
         self.model = xgb.XGBRegressor(**model_params)
@@ -61,10 +60,10 @@ class CoalFireModel:
                 X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
                 y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
                 
-                # Обучаем (early_stopping теперь внутри self.model)
+                # Обучаем (регуляризация в параметрах модели достаточна)
                 self.model.fit(
                     X_train, y_train, 
-                    eval_set=[(X_val, y_val)], 
+                    eval_set=[(X_val, y_val)],
                     verbose=False
                 )
                 y_pred = self.model.predict(X_val)

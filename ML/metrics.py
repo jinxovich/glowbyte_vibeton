@@ -29,9 +29,13 @@ def evaluate_model(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
     mae = np.mean(abs_errors)
     rmse = np.sqrt(np.mean(errors ** 2))
     
-    # MAPE (Mean Absolute Percentage Error)
-    # Избегаем деления на ноль
-    mape = np.mean(np.abs(errors / (y_true + 1e-10))) * 100
+    # MAPE (Mean Absolute Percentage Error) - только для значений > 5 дней
+    # Избегаем деления на ноль и взрыва MAPE для малых значений
+    mape_mask = y_true > 5
+    if np.sum(mape_mask) > 0:
+        mape = np.mean(np.abs(errors[mape_mask] / y_true[mape_mask])) * 100
+    else:
+        mape = 0.0
     
     # Медианная абсолютная ошибка
     median_ae = np.median(abs_errors)

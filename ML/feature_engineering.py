@@ -81,9 +81,35 @@ class FeatureEngineer:
             for lag in lags:
                 col_name = f'{feature}_lag_{lag}d'
                 df[col_name] = df.groupby(['storage_id', 'stack_id'])[feature].shift(lag)
-                df[col_name] = df[col_name].fillna(df[feature])
+                # Заполняем медианой, а не текущим значением (избегаем data leakage)
+                df[col_name] = df[col_name].fillna(df[feature].median())
 
-        # ===== 7. КАТЕГОРИАЛЬНЫЕ ПРИЗНАКИ (ИСПРАВЛЕНО) =====
+        # ===== 7. FEATURE INTERACTIONS (НОВОЕ) =====
+        # Взаимодействия признаков
+        df['temp_x_days'] = df['max_temp'] * df['days_since_formation']
+        df['temp_x_humidity'] = df['max_temp'] * (100 - df['weather_humidity'])
+        df['temp_x_weight'] = df['max_temp'] * np.log1p(df['coal_weight'])
+        
+        # Нелинейные трансформации
+        df['max_temp_squared'] = df['max_temp'] ** 2
+        df['max_temp_log'] = np.log1p(df['max_temp'])
+        df['days_storage_log'] = np.log1p(df['days_since_formation'])
+        
+        # Температурные пороги (domain knowledge)
+        df['critical_temp_indicator'] = (df['max_temp'] > 70).astype(int)
+        df['danger_zone_indicator'] = ((df['max_temp'] > 50) & (df['max_temp'] <= 70)).astype(int)
+        
+        # Скорость изменения (второй порядок)
+        df['temp_acceleration'] = df.groupby(['storage_id', 'stack_id'])['temp_growth_rate'].diff().fillna(0)
+        
+        # Cumulative features
+        df['cumulative_high_temp_days'] = df.groupby(['storage_id', 'stack_id'])['high_temp_indicator'].cumsum()
+        
+        # Ratio features
+        df['temp_to_avg_ratio'] = df['max_temp'] / (df['temp_rolling_7d_avg'] + 1e-10)
+        df['humidity_wind_ratio'] = df['weather_humidity'] / (df['wind_speed_avg'] + 1)
+        
+        # ===== 8. КАТЕГОРИАЛЬНЫЕ ПРИЗНАКИ (ИСПРАВЛЕНО) =====
         # Безопасная обработка, если колонки исчезли
         if 'coal_grade' not in df.columns:
             df['coal_grade'] = 'unknown'
@@ -91,8 +117,9 @@ class FeatureEngineer:
         
         df['storage_id_encoded'] = pd.factorize(df['storage_id'])[0]
         
-        # Статистика
-        df['stack_max_temp_ever'] = df.groupby(['storage_id', 'stack_id'])['max_temp'].transform('max')
+        # Статистика (без data leakage - используем cummax)
+        df = df.sort_values(['storage_id', 'stack_id', 'measurement_date']).reset_index(drop=True)
+        df['stack_max_temp_ever'] = df.groupby(['storage_id', 'stack_id'])['max_temp'].transform('cummax')
         
         print(f"  ✓ Признаки созданы. Размер: {df.shape}")
         return df
@@ -100,13 +127,32 @@ class FeatureEngineer:
     @staticmethod
     def get_feature_columns() -> List[str]:
         return [
+            # Базовые признаки
             'days_in_storage', 'coal_weight', 'days_since_formation',
             'max_temp', 'temp_growth_rate',
+            
+            # Rolling features
             'temp_rolling_3d_avg', 'temp_rolling_7d_avg', 'temp_rolling_7d_max',
             'high_temp_days_7d', 'extreme_temp_indicator',
+            
+            # Погодные признаки
             'weather_temp', 'weather_humidity', 'wind_speed_avg',
             'thermal_stress_index', 'temp_diff_internal_external',
+            
+            # Временные признаки
             'season', 'coal_type_encoded', 'storage_id_encoded',
+            
+            # Лаги
             'max_temp_lag_1d', 'max_temp_lag_3d', 'max_temp_lag_7d',
-            'stack_max_temp_ever'
+            'thermal_stress_index_lag_1d', 'thermal_stress_index_lag_3d', 'thermal_stress_index_lag_7d',
+            
+            # Статистика
+            'stack_max_temp_ever',
+            
+            # Новые взаимодействия и трансформации
+            'temp_x_days', 'temp_x_humidity', 'temp_x_weight',
+            'max_temp_squared', 'max_temp_log', 'days_storage_log',
+            'critical_temp_indicator', 'danger_zone_indicator',
+            'temp_acceleration', 'cumulative_high_temp_days',
+            'temp_to_avg_ratio', 'humidity_wind_ratio'
         ]

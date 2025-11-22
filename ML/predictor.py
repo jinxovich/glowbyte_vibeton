@@ -70,11 +70,21 @@ class CoalCombustionPredictor:
         
         print(f"  ✓ Всего строк: {len(X)}")
         
-        # 5. ЧЕСТНОЕ РАЗДЕЛЕНИЕ (Hold-out)
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
+        # 5. СТРАТИФИЦИРОВАННОЕ РАЗДЕЛЕНИЕ
+        # Используем стратификацию по бинам days_until_fire для равномерного распределения
+        y_binned = pd.cut(y, bins=[-1, 7, 14, 30, 100], labels=[0, 1, 2, 3])
+        
+        from sklearn.model_selection import StratifiedShuffleSplit
+        splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        train_idx, test_idx = next(splitter.split(X, y_binned))
+        
+        X_train = X.iloc[train_idx]
+        X_test = X.iloc[test_idx]
+        y_train = y.iloc[train_idx]
+        y_test = y.iloc[test_idx]
         
         print(f"  ✓ Обучение на: {len(X_train)} строк")
-        print(f"  ✓ Тест (проверка) на: {len(X_test)} строк")
+        print(f"  ✓ Тест (проверка) на: {len(X_test)} строк (стратифицированное разделение)")
         
         # Обучаем
         self.model.train(X_train, y_train, cv_splits=5)
@@ -105,9 +115,10 @@ class CoalCombustionPredictor:
         imp = self.model.get_feature_importance(top_n=10)
         print(imp.to_string(index=False))
         
-        # 6. Финальное переобучение
-        print("\n💾 Сохранение финальной модели...")
-        self.model.model.fit(X, y, verbose=False)
+        # 6. Сохранение модели (БЕЗ финального переобучения - используем CV модель)
+        print("\n💾 Сохранение модели (CV версия без переобучения)...")
+        # ВАЖНО: НЕ переобучаем на всех данных! Используем модель после CV
+        # Это помогает избежать overfitting
         self.model.save(self.model_path)
         self._save_metrics(test_metrics)
         
@@ -119,10 +130,58 @@ class CoalCombustionPredictor:
         rename_map = {'max_temperature': 'max_temp', 'pile_age_days': 'days_since_formation', 'stack_mass_tons': 'coal_weight'}
         df = df.rename(columns=rename_map)
         
+        # 🛡️ ВАЛИДАЦИЯ ТЕМПЕРАТУРЫ
+        if 'max_temp' in df.columns:
+            # Проверяем аномальные значения
+            temp_warnings = []
+            for idx, temp in enumerate(df['max_temp']):
+                if temp < 10:
+                    temp_warnings.append(f"⚠️ Строка {idx}: Температура {temp}°C слишком низкая (ниже 10°C). Возможно ошибка измерения.")
+                    # Заменяем на медианное значение из обучающих данных (~30°C)
+                    df.loc[df.index[idx], 'max_temp'] = 30.0
+                elif temp > 100:
+                    temp_warnings.append(f"⚠️ Строка {idx}: Температура {temp}°C подозрительно высокая. Проверьте датчик!")
+            
+            if temp_warnings:
+                for warning in temp_warnings:
+                    print(warning)
+        
         if 'days_since_formation' not in df.columns: df['days_since_formation'] = 0
-        for col in ['weather_temp', 'weather_humidity', 'wind_speed_avg']:
+        for col in ['weather_temp', 'weather_humidity', 'wind_speed_avg', 'coal_weight']:
             if col not in df.columns: df[col] = 0
-                
+        
+        # 🔥 ВАЖНО: При inference создаем реалистичные значения для топ-признаков
+        # Иначе модель будет игнорировать температуру!
+        
+        # 1. cumulative_high_temp_days - аппроксимируем по текущей температуре и возрасту
+        if 'max_temp' in df.columns:
+            # Если температура высокая и штабель старый → много дней с высокой температурой
+            df['cumulative_high_temp_days'] = np.where(
+                df['max_temp'] > 40,
+                df['days_since_formation'] * 0.3,  # ~30% времени температура была высокой
+                df['days_since_formation'] * 0.05  # ~5% времени
+            )
+            
+            # 2. high_temp_days_7d - дней с высокой температурой за последние 7 дней
+            df['high_temp_days_7d'] = np.where(
+                df['max_temp'] > 40,
+                np.minimum(7, df['days_since_formation']),  # Все 7 дней или меньше
+                0
+            )
+            
+            # 3. stack_max_temp_ever - максимальная температура = текущая (консервативная оценка)
+            df['stack_max_temp_ever'] = df['max_temp']
+            
+            # 4. high_temp_indicator
+            df['high_temp_indicator'] = (df['max_temp'] > 40).astype(int)
+            
+            # 5. extreme_temp_indicator
+            df['extreme_temp_indicator'] = (df['max_temp'] > 60).astype(int)
+            
+            # 6. critical_temp_indicator, danger_zone_indicator
+            df['critical_temp_indicator'] = (df['max_temp'] > 70).astype(int)
+            df['danger_zone_indicator'] = ((df['max_temp'] > 50) & (df['max_temp'] <= 70)).astype(int)
+        
         df['temp_growth_rate'] = 0 
         df['thermal_stress_index'] = df['max_temp'] * (1 - df.get('weather_humidity', 50)/200)
         
@@ -148,46 +207,39 @@ class CoalCombustionPredictor:
 
     def predict_with_confidence(self, X: pd.DataFrame) -> pd.DataFrame:
         """
-        Предсказать с оценкой уверенности и ЗАЩИТОЙ ОТ ДУРАКА (Expert Rules).
+        Предсказать с оценкой уверенности (БЕЗ принудительных override).
+        Доверяем модели - она обучена на реальных данных!
         """
-        # 1. Получаем сырое предсказание от модели
-        predictions = self.model.predict(X) # Важно: используем model.predict напрямую, чтобы не обрезать X раньше времени
+        # 1. Получаем предсказание от модели
+        predictions = self.model.predict(X)
         
-        # Обрезаем отрицательные значения
+        # Обрезаем только отрицательные значения
         predictions = np.maximum(predictions, 0)
-        
-        # 2. Базовая уверенность
-        confidence = 1 / (1 + predictions / 20)
-        
-        # 3. 🛡️ SAFETY OVERRIDE (ФИЗИЧЕСКИЙ КОНТРОЛЬ)
-        # Если температура > 60°C -> Это КРИТИЧЕСКИЙ риск.
         
         preds_series = pd.Series(predictions)
         
-        # В X должны быть данные. Если X - это только feature_columns, там есть max_temp.
+        # 2. Уверенность зависит от температуры (физический смысл)
         if 'max_temp' in X.columns:
             max_temps = X['max_temp'].reset_index(drop=True)
             
-            # Принудительные корректировки
-            critical_mask = max_temps > 60
-            high_mask = (max_temps > 45) & (max_temps <= 60)
+            # Чем выше температура, тем выше уверенность
+            # Логистическая функция от температуры
+            confidence_series = 1 / (1 + np.exp(-(max_temps - 40) / 10))
+            # При 40°C: confidence ~0.5
+            # При 60°C: confidence ~0.88
+            # При 20°C: confidence ~0.12
             
-            # Переписываем предсказания физикой
-            preds_series[critical_mask] = 0.5  # Пол-дня до пожара
-            preds_series[high_mask] = np.minimum(preds_series[high_mask], 5.0) # Не больше 5 дней
-            
-            # Для критических случаев уверенность ~100%
-            confidence_series = pd.Series(confidence)
-            confidence_series[critical_mask] = 0.99
-            confidence_series[high_mask] = np.maximum(confidence_series[high_mask], 0.8)
+            # Минимальная уверенность 10%, максимальная 95%
+            confidence_series = np.clip(confidence_series, 0.1, 0.95)
         else:
-            confidence_series = pd.Series(confidence)
+            # Если нет температуры, уверенность зависит от предсказания
+            confidence_series = pd.Series(1 / (1 + preds_series / 20))
 
-        # 4. Рассчитываем уровни риска заново
+        # 3. Рассчитываем уровни риска
         risk_level = pd.cut(
             preds_series,
-            bins=[-1, 3, 7, 14, 1000],
-            labels=['критический', 'высокий', 'средний', 'низкий']
+            bins=[-1, 3, 7, 14, 30, 1000],
+            labels=['критический', 'высокий', 'средний', 'низкий', 'минимальный']
         )
         
         return pd.DataFrame({

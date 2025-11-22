@@ -146,7 +146,7 @@ class DataPreprocessor:
             right_on='fire_date',
             by=['storage_id', 'stack_id'],
             direction='forward',
-            tolerance=pd.Timedelta(days=180)
+            tolerance=pd.Timedelta(days=120)  # Компромисс между 90 и 180
         )
         
         merged_df['days_until_fire'] = (merged_df['fire_date'] - merged_df['measurement_date']).dt.days
