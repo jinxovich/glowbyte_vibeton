@@ -1,120 +1,91 @@
-import { useState, useEffect } from 'react';
-import type { ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Flame, Activity, Calendar, History, BarChart3, Settings } from 'lucide-react';
-import { healthCheck } from '../lib/api';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, Flame, Users, LogOut, Menu } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useState } from 'react';
+import { clsx } from 'clsx';
 
-interface LayoutProps {
-  children: ReactNode;
-}
-
-export default function Layout({ children }: LayoutProps) {
+export default function Layout() {
+  const { user, logout } = useAuth();
   const location = useLocation();
-  const [modelLoaded, setModelLoaded] = useState(false);
-  const [checking, setChecking] = useState(true);
+  const navigate = useNavigate();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  useEffect(() => {
-    const checkHealth = async () => {
-      try {
-        const health = await healthCheck();
-        setModelLoaded(health.model_loaded);
-      } catch (error) {
-        console.error('Health check failed:', error);
-      } finally {
-        setChecking(false);
-      }
-    };
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
-    checkHealth();
-    const interval = setInterval(checkHealth, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const navigation = [
-    { name: 'Dashboard', href: '/', icon: Activity },
-    { name: 'Календарь', href: '/calendar', icon: Calendar },
-    { name: 'История', href: '/history', icon: History },
-    { name: 'Метрики', href: '/metrics', icon: BarChart3 },
+  const navItems = [
+    { icon: LayoutDashboard, label: 'Дашборд', path: '/' },
+    { icon: Flame, label: 'Прогноз', path: '/predict' },
   ];
 
+  if (user?.role === 'admin') {
+    navItems.push({ icon: Users, label: 'Пользователи', path: '/admin' });
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-gradient-to-r from-red-600 to-red-700 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-3">
-              <Flame className="h-8 w-8 text-white animate-pulse" />
-              <h1 className="text-2xl font-bold text-white">
-                Coal Fire Prediction
-              </h1>
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
+      <aside className={clsx(
+        "bg-slate-900 text-white transition-all duration-300 flex flex-col flex-shrink-0",
+        sidebarOpen ? "w-64" : "w-20"
+      )}>
+        <div className="p-6 flex items-center gap-3 font-bold text-xl border-b border-slate-800 h-20">
+          <Flame className="text-orange-500 w-8 h-8 flex-shrink-0" />
+          {sidebarOpen && <span className="text-orange-500 tracking-wider truncate">VIBETON</span>}
+        </div>
+
+        <nav className="flex-1 py-6 space-y-2 px-3 overflow-y-auto">
+          {navItems.map((item) => (
+            <Link
+              key={item.path}
+              to={item.path}
+              className={clsx(
+                "flex items-center gap-4 px-4 py-3 rounded-xl transition-colors",
+                location.pathname === item.path
+                  ? "bg-orange-600 text-white shadow-lg shadow-orange-900/20"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
+              )}
+            >
+              <item.icon size={24} className="flex-shrink-0" />
+              {sidebarOpen && <span className="truncate">{item.label}</span>}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-slate-800">
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-4 px-4 py-3 w-full text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-xl transition-colors"
+          >
+            <LogOut size={24} className="flex-shrink-0" />
+            {sidebarOpen && <span>Выход</span>}
+          </button>
+        </div>
+      </aside>
+
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="bg-white shadow-sm h-20 flex items-center justify-between px-8 flex-shrink-0 z-10">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg">
+            <Menu size={24} className="text-slate-600" />
+          </button>
+          <div className="flex items-center gap-4">
+            <div className="text-right hidden sm:block">
+              <p className="text-sm font-bold text-slate-900">{user?.full_name}</p>
+              <p className="text-xs text-slate-500 uppercase">{user?.role}</p>
             </div>
-            
-            <div className="flex items-center space-x-4">
-              <Link
-                to="/train"
-                className="flex items-center space-x-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
-              >
-                <Settings className="h-4 w-4" />
-                <span className="hidden sm:inline">Обучить модель</span>
-              </Link>
-              
-              <div className="flex items-center space-x-2 px-4 py-2 bg-white/10 rounded-lg">
-                <div className={`h-2 w-2 rounded-full ${
-                  checking ? 'bg-yellow-400' : 
-                  modelLoaded ? 'bg-green-400 animate-pulse' : 'bg-red-400'
-                }`} />
-                <span className="text-white text-sm hidden sm:inline">
-                  {checking ? 'Проверка...' : modelLoaded ? 'Модель загружена' : 'Модель не найдена'}
-                </span>
-              </div>
+            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-orange-700 font-bold">
+              {user?.full_name?.[0] || 'U'}
             </div>
           </div>
-        </div>
-      </header>
-
-      {/* Navigation */}
-      <nav className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            {navigation.map((item) => {
-              const isActive = location.pathname === item.href;
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.name}
-                  to={item.href}
-                  className={`
-                    flex items-center space-x-2 px-3 py-4 text-sm font-medium border-b-2 transition-colors
-                    ${isActive
-                      ? 'border-red-600 text-red-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                    }
-                  `}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>{item.name}</span>
-                </Link>
-              );
-            })}
+        </header>
+        
+        <main className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50">
+          <div className="max-w-7xl mx-auto">
+            <Outlet />
           </div>
-        </div>
-      </nav>
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {children}
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t border-gray-200 mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <p className="text-center text-sm text-gray-500">
-            🔥 Coal Fire Prediction System v1.0 | Сделано с ❤️ для безопасности угольных терминалов
-          </p>
-        </div>
-      </footer>
+        </main>
+      </div>
     </div>
   );
 }
-

@@ -8,10 +8,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 
 const ProtectedRoute = ({ children, adminOnly = false }: { children: any, adminOnly?: boolean }) => {
   const { isAuthenticated, user } = useAuth();
-  
   if (!isAuthenticated) return <Navigate to="/login" />;
   if (adminOnly && user?.role !== 'admin') return <Navigate to="/" />;
-  
   return children;
 };
 
@@ -19,7 +17,6 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         <Route path="predict" element={<Predict />} />
