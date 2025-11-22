@@ -28,11 +28,14 @@ class PredictionInput(BaseModel):
     storage_id: str
     stack_id: str
     max_temperature: float
-    measurement_date: str
     # Опциональные
-    weather_temp: Optional[float] = 0
-    weather_humidity: Optional[float] = 0
-    wind_speed_avg: Optional[float] = 0
+    pile_age_days: Optional[int] = 30
+    stack_mass_tons: Optional[float] = 5000
+    weather_temp: Optional[float] = 15
+    weather_humidity: Optional[float] = 50
+    wind_speed: Optional[float] = 3
+    precipitation: Optional[float] = 0
+    measurement_date: Optional[str] = None
     
 class PredictionResponse(BaseModel):
     id: int
