@@ -94,7 +94,6 @@ class CoalCombustionPredictor:
         
         # Оставляем только понятные колонки для просмотра
         view_cols = ['storage_id_encoded', 'max_temp', 'days_since_formation', 'REAL_DAYS', 'PREDICTED_DAYS', 'ERROR']
-        # Если есть оригинальные ID, было бы круче, но они закодированы. Сохраняем как есть.
         
         save_path = self.artifacts_dir / "final_comparison.csv"
         comparison_df.to_csv(save_path, index=False)
@@ -131,7 +130,9 @@ class CoalCombustionPredictor:
         for col in feature_cols:
             if col not in df.columns: df[col] = 0
         X = df[feature_cols].fillna(0)
-        preds = self.model.predict_with_confidence(X)
+        
+        # Используем умное предсказание с защитой
+        preds = self.predict_with_confidence(X)
         
         results = []
         for i, row in df.iterrows():
@@ -144,6 +145,56 @@ class CoalCombustionPredictor:
                 'confidence': float(preds.iloc[i]['confidence'])
             })
         return results
+
+    def predict_with_confidence(self, X: pd.DataFrame) -> pd.DataFrame:
+        """
+        Предсказать с оценкой уверенности и ЗАЩИТОЙ ОТ ДУРАКА (Expert Rules).
+        """
+        # 1. Получаем сырое предсказание от модели
+        predictions = self.model.predict(X) # Важно: используем model.predict напрямую, чтобы не обрезать X раньше времени
+        
+        # Обрезаем отрицательные значения
+        predictions = np.maximum(predictions, 0)
+        
+        # 2. Базовая уверенность
+        confidence = 1 / (1 + predictions / 20)
+        
+        # 3. 🛡️ SAFETY OVERRIDE (ФИЗИЧЕСКИЙ КОНТРОЛЬ)
+        # Если температура > 60°C -> Это КРИТИЧЕСКИЙ риск.
+        
+        preds_series = pd.Series(predictions)
+        
+        # В X должны быть данные. Если X - это только feature_columns, там есть max_temp.
+        if 'max_temp' in X.columns:
+            max_temps = X['max_temp'].reset_index(drop=True)
+            
+            # Принудительные корректировки
+            critical_mask = max_temps > 60
+            high_mask = (max_temps > 45) & (max_temps <= 60)
+            
+            # Переписываем предсказания физикой
+            preds_series[critical_mask] = 0.5  # Пол-дня до пожара
+            preds_series[high_mask] = np.minimum(preds_series[high_mask], 5.0) # Не больше 5 дней
+            
+            # Для критических случаев уверенность ~100%
+            confidence_series = pd.Series(confidence)
+            confidence_series[critical_mask] = 0.99
+            confidence_series[high_mask] = np.maximum(confidence_series[high_mask], 0.8)
+        else:
+            confidence_series = pd.Series(confidence)
+
+        # 4. Рассчитываем уровни риска заново
+        risk_level = pd.cut(
+            preds_series,
+            bins=[-1, 3, 7, 14, 1000],
+            labels=['критический', 'высокий', 'средний', 'низкий']
+        )
+        
+        return pd.DataFrame({
+            'predicted_days': preds_series,
+            'confidence': confidence_series,
+            'risk_level': risk_level
+        })
 
     def _save_metrics(self, metrics: Dict[str, Any]) -> None:
         def sanitize(obj):
