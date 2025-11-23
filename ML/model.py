@@ -1,120 +1,98 @@
-"""XGBoost модель для прогнозирования самовозгорания угля."""
-
+"""XGBoost с авто-тюнингом (Optuna - Fast Version)."""
 from __future__ import annotations
-
+import xgboost as xgb
+import optuna
 import numpy as np
 import pandas as pd
 import joblib
 from pathlib import Path
-from typing import Optional, Dict, Any
+from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import TimeSeriesSplit
-import xgboost as xgb
-import sys
 
 class CoalFireModel:
-    """Модель для предсказания дней до самовозгорания."""
-    
-    def __init__(self, model_params: Optional[Dict[str, Any]] = None):
-        """Инициализация модели."""
-        if model_params is None:
-            # ОПТИМИЗИРОВАННЫЕ ПАРАМЕТРЫ (СБАЛАНСИРОВАННАЯ РЕГУЛЯРИЗАЦИЯ)
-            model_params = {
-                'n_estimators': 700,  # Компромисс между 500 и 1000
-                'learning_rate': 0.03,  # Немного выше для быстрого обучения
-                'max_depth': 6,  # Компромисс между 4 и 8
-                'min_child_weight': 3,  # Компромисс между 2 и 5
-                'subsample': 0.75,  # Компромисс между 0.7 и 0.8
-                'colsample_bytree': 0.75,  # Компромисс
-                'gamma': 0.2,  # Умеренная регуляризация
-                'reg_lambda': 5.0,  # Средняя L2 регуляризация
-                'reg_alpha': 0.5,  # Легкая L1 регуляризация
-                'random_state': 42,
-                'n_jobs': -1,
-                'objective': 'reg:squarederror',
-                'eval_metric': 'rmse'
-            }
-        
-        self.model = xgb.XGBRegressor(**model_params)
+    def __init__(self):
+        self.model = None
         self.feature_names = None
-        self.cv_scores = []
+        # Дефолтные параметры (если Optuna упадет или будет отключена)
+        self.best_params = {
+            'n_estimators': 300, 
+            'max_depth': 5, 
+            'learning_rate': 0.05,
+            'objective': 'reg:squarederror', 
+            'n_jobs': -1
+        }
+
+    def optimize(self, X: pd.DataFrame, y: pd.Series, n_trials=10):
+        """Поиск идеальных гиперпараметров (УСКОРЕННЫЙ)."""
+        print(f"🎯 Запуск оптимизации Optuna ({n_trials} попыток)...")
         
-    def train(self, X: pd.DataFrame, y: pd.Series, cv_splits: int = 5) -> Dict[str, float]:
-        """Обучить модель."""
+        def objective(trial):
+            param = {
+                'objective': 'reg:squarederror',
+                # УМЕНЬШИЛИ ДИАПАЗОНЫ: Меньше деревьев = быстрее
+                'n_estimators': trial.suggest_int('n_estimators', 100, 400),
+                'max_depth': trial.suggest_int('max_depth', 3, 6),
+                'learning_rate': trial.suggest_float('learning_rate', 0.03, 0.15),
+                'subsample': trial.suggest_float('subsample', 0.7, 0.9),
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.7, 0.9),
+                # Регуляризация
+                'reg_alpha': trial.suggest_float('reg_alpha', 0, 5),
+                'reg_lambda': trial.suggest_float('reg_lambda', 0, 5),
+                'n_jobs': -1,
+                'random_state': 42
+            }
+            
+            # 3 фолда - оптимально для скорости
+            tscv = TimeSeriesSplit(n_splits=3)
+            scores = []
+            
+            for train_idx, val_idx in tscv.split(X):
+                X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+                y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                
+                model = xgb.XGBRegressor(**param)
+                model.fit(X_tr, y_tr, verbose=False)
+                preds = model.predict(X_val)
+                scores.append(mean_absolute_error(y_val, preds))
+            
+            return np.mean(scores)
+
+        # Ограничиваем время (не больше 60 секунд на поиск) или количество попыток
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=n_trials, timeout=60)
+        
+        print(f"✅ Лучшие параметры: {study.best_params}")
+        self.best_params = study.best_params
+        self.best_params['objective'] = 'reg:squarederror'
+        self.best_params['n_jobs'] = -1
+
+    def train_final(self, X: pd.DataFrame, y: pd.Series):
         self.feature_names = X.columns.tolist()
         
-        print(f"\n🤖 Обучение модели XGBoost (High Quality CPU)...", flush=True)
-        print(f"   Размер данных: {X.shape}", flush=True)
-        
-        real_splits = min(cv_splits, len(X) // 20)
-        if real_splits < 2:
-            print("⚠️ Мало данных для кросс-валидации, обучаем на всем датасете.", flush=True)
-            tscv = []
-        else:
-            tscv = TimeSeriesSplit(n_splits=real_splits)
-        
-        cv_accuracy_2d = []
-        cv_mae = []
-        
-        if real_splits >= 2:
-            for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
-                X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-                
-                # Обучаем (регуляризация в параметрах модели достаточна)
-                self.model.fit(
-                    X_train, y_train, 
-                    eval_set=[(X_val, y_val)],
-                    verbose=False
-                )
-                y_pred = self.model.predict(X_val)
-                
-                # Считаем метрики
-                acc = self._accuracy_2days(y_pred, y_val.values)
-                mae = np.mean(np.abs(y_pred - y_val.values))
-                cv_accuracy_2d.append(acc)
-                cv_mae.append(mae)
-                
-                print(f"  🚀 Fold {fold}: Accuracy ±2d={acc:.2%}, MAE={mae:.2f}", flush=True)
-
-            print(f"  ✓ Средняя CV Accuracy: {np.mean(cv_accuracy_2d):.2%}", flush=True)
-        
-        self.cv_scores = cv_accuracy_2d
-        
-        # Финальное обучение
-        print("  🏁 Финальная сборка модели...", flush=True)
-        # Для финального обучения early_stopping не нужен (нет валидации),
-        # но он не помешает, просто не сработает без eval_set.
+        print(f"⚙️ Применяем параметры: {self.best_params}")
+        self.model = xgb.XGBRegressor(**self.best_params)
         self.model.fit(X, y, verbose=False)
         
-        mean_acc = np.mean(cv_accuracy_2d) if cv_accuracy_2d else 0.0
-        mean_mae = np.mean(cv_mae) if cv_mae else 0.0
-        
-        return {
-            'accuracy_2days': mean_acc,
-            'mae': mean_mae,
-            'n_features': len(self.feature_names),
-            'n_samples': len(X)
-        }
-    
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        if self.feature_names is not None:
+        if self.feature_names:
+            # Гарантируем порядок колонок как при обучении
+            # Если какой-то колонки нет - ошибка (или заполним 0)
+            missing = set(self.feature_names) - set(X.columns)
+            if missing:
+                for c in missing: X[c] = 0
             X = X[self.feature_names]
-        preds = self.model.predict(X)
-        return np.maximum(preds, 0)
-    
-    def predict_with_confidence(self, X: pd.DataFrame) -> pd.DataFrame:
-        predictions = self.predict(X)
-        confidence = 1 / (1 + predictions / 20) 
-        risk_level = pd.cut(
-            predictions,
-            bins=[-1, 5, 10, 20, 1000],
-            labels=['критический', 'высокий', 'средний', 'низкий']
-        )
-        return pd.DataFrame({
-            'predicted_days': predictions,
-            'confidence': confidence,
-            'risk_level': risk_level
-        })
+            
+        return np.maximum(self.model.predict(X), 0) 
+
+    def save(self, path: str | Path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({'model': self.model, 'feat': self.feature_names}, path)
+
+    def load(self, path: str | Path):
+        data = joblib.load(path)
+        self.model = data['model']
+        self.feature_names = data['feat']
     
     def get_feature_importance(self, top_n: int = 20) -> pd.DataFrame:
         if self.feature_names is None: return pd.DataFrame()
@@ -122,19 +100,3 @@ class CoalFireModel:
             'feature': self.feature_names,
             'importance': self.model.feature_importances_
         }).sort_values('importance', ascending=False).head(top_n)
-    
-    @staticmethod
-    def _accuracy_2days(y_pred: np.ndarray, y_true: np.ndarray) -> float:
-        return float(np.mean(np.abs(y_pred - y_true) <= 2))
-    
-    def save(self, path: str | Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({'model': self.model, 'feature_names': self.feature_names}, path)
-        print(f"✓ Модель сохранена: {path}", flush=True)
-    
-    def load(self, path: str | Path) -> CoalFireModel:
-        data = joblib.load(path)
-        self.model = data['model']
-        self.feature_names = data['feature_names']
-        return self

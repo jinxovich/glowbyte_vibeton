@@ -1,22 +1,16 @@
-"""Загрузка и объединение CSV данных."""
-
+"""Загрузка ВСЕХ доступных данных (Type Safe Version)."""
 from __future__ import annotations
-
 import pandas as pd
 from pathlib import Path
 import warnings
 
 warnings.filterwarnings('ignore')
 
-
 class DataPreprocessor:
-    """Класс для загрузки и объединения всех CSV файлов."""
-    
     def __init__(self, data_dir: str | Path):
         self.data_dir = Path(data_dir)
 
     def _normalize_ids(self, df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-        """Приводит строковые ID к единому формату."""
         for col in cols:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip().str.lower()
@@ -25,180 +19,138 @@ class DataPreprocessor:
     def load_fires(self) -> pd.DataFrame:
         path = self.data_dir / "fires.csv"
         df = pd.read_csv(path, encoding='utf-8')
-        
-        df['Дата начала'] = pd.to_datetime(df['Дата начала'])
-        df['Дата оконч.'] = pd.to_datetime(df['Дата оконч.'])
-        df['Нач.форм.штабеля'] = pd.to_datetime(df['Нач.форм.штабеля'])
-        
-        # ВАЖНО: Целевая переменная - начало пожара, а не конец
-        df['fire_date'] = df['Дата начала']
+        # errors='coerce' превратит битые даты в NaT, а не оставит строками
+        df['fire_date'] = pd.to_datetime(df['Дата начала'], errors='coerce')
         
         df = df.rename(columns={
-            'Склад': 'storage_id',
-            'Штабель': 'stack_id',
-            'Груз': 'cargo_code',
-            'Вес по акту, тн': 'fire_weight',
+            'Склад': 'storage_id', 'Штабель': 'stack_id',
             'Нач.форм.штабеля': 'stack_formation_date'
         })
-        
-        df = self._normalize_ids(df, ['storage_id', 'stack_id', 'cargo_code'])
-        # Сортировка важна для merge_asof
-        return df.sort_values('fire_date')
+        # Удаляем строки, где дата пожара не распозналась
+        df = df.dropna(subset=['fire_date'])
+        return self._normalize_ids(df, ['storage_id', 'stack_id']).sort_values('fire_date')
     
     def load_supplies(self) -> pd.DataFrame:
         path = self.data_dir / "supplies.csv"
         df = pd.read_csv(path, encoding='utf-8')
         
-        df['ВыгрузкаНаСклад'] = pd.to_datetime(df['ВыгрузкаНаСклад'])
-        df['ПогрузкаНаСудно'] = pd.to_datetime(df['ПогрузкаНаСудно'])
-        df['days_in_storage'] = (df['ПогрузкаНаСудно'] - df['ВыгрузкаНаСклад']).dt.days
+        df['unload_date'] = pd.to_datetime(df['ВыгрузкаНаСклад'], errors='coerce')
         
         df = df.rename(columns={
-            'Склад': 'storage_id',
-            'Штабель': 'stack_id',
-            'Наим. ЕТСНГ': 'cargo_code',
-            'На склад, тн': 'coal_weight_storage',
-            'На судно, тн': 'coal_weight_ship',
-            'ВыгрузкаНаСклад': 'unload_date',
-            'ПогрузкаНаСудно': 'load_date'
+            'Склад': 'storage_id', 'Штабель': 'stack_id',
+            'Наим. ЕТСНГ': 'coal_grade',
+            'На склад, тн': 'weight_in'
         })
-        
-        df = self._normalize_ids(df, ['storage_id', 'stack_id', 'cargo_code'])
-        return df
+        return self._normalize_ids(df, ['storage_id', 'stack_id', 'coal_grade'])
     
     def load_temperature(self) -> pd.DataFrame:
         path = self.data_dir / "temperature.csv"
         df = pd.read_csv(path, encoding='utf-8')
-        df['Дата акта'] = pd.to_datetime(df['Дата акта'])
+        df['measurement_date'] = pd.to_datetime(df['Дата акта'], errors='coerce')
         
         df = df.rename(columns={
-            'Склад': 'storage_id',
-            'Штабель': 'stack_id',
-            'Марка': 'coal_grade',
+            'Склад': 'storage_id', 'Штабель': 'stack_id',
             'Максимальная температура': 'max_temp',
-            'Дата акта': 'measurement_date',
-            'Смена': 'shift',
-            'Пикет': 'picket'
+            'Пикет': 'picket', 'Смена': 'shift'
         })
-        
-        df = self._normalize_ids(df, ['storage_id', 'stack_id', 'coal_grade'])
-        # Сортировка важна для merge_asof
-        return df.sort_values('measurement_date')
+        return self._normalize_ids(df, ['storage_id', 'stack_id']).sort_values('measurement_date')
     
     def load_weather(self) -> pd.DataFrame:
-        weather_files = sorted(self.data_dir.glob("weather_data_*.csv"))
-        if not weather_files:
-            return pd.DataFrame()
-
         dfs = []
-        for file in weather_files:
-            df = pd.read_csv(file, encoding='utf-8')
-            dfs.append(df)
+        for file in sorted(self.data_dir.glob("weather_data_*.csv")):
+            dfs.append(pd.read_csv(file, encoding='utf-8'))
+        if not dfs: return pd.DataFrame()
         
         df = pd.concat(dfs, ignore_index=True)
-        df['date'] = pd.to_datetime(df['date'])
-        df['weather_date'] = df['date'].dt.date
+        df['weather_date'] = pd.to_datetime(pd.to_datetime(df['date'], errors='coerce').dt.date)
         
+        # Агрегируем по дням
         agg_df = df.groupby('weather_date').agg({
             't': 'mean', 'humidity': 'mean', 'precipitation': 'sum',
-            'v_avg': 'mean', 'v_max': 'max'
+            'p': 'mean', 'cloudcover': 'mean', 'visibility': 'mean',
+            'v_avg': 'mean', 'v_max': 'max', 
+            'wind_dir': 'mean',
+            'weather_code': lambda x: x.mode()[0] if not x.mode().empty else 0 
         }).reset_index()
-        
-        agg_df['weather_date'] = pd.to_datetime(agg_df['weather_date'])
         
         return agg_df.rename(columns={
             't': 'weather_temp', 'humidity': 'weather_humidity',
             'precipitation': 'weather_precipitation',
+            'p': 'pressure', 'cloudcover': 'cloud_cover',
             'v_avg': 'wind_speed_avg', 'v_max': 'wind_speed_max'
         })
     
-    def merge_all_data(self) -> pd.DataFrame:
-        print("📊 Загрузка данных (Smart Merge)...")
+    def prepare_full_dataset(self) -> pd.DataFrame:
+        print("📊 Загрузка FULL DATASET (Safe Mode)...")
+        fires = self.load_fires()
+        supplies = self.load_supplies()
+        temp = self.load_temperature()
+        weather = self.load_weather()
         
-        fires_df = self.load_fires()
-        supplies_df = self.load_supplies()
-        temperature_df = self.load_temperature()
-        weather_df = self.load_weather()
-        
-        # 1. Привязка Supplies
-        supplies_agg = supplies_df.groupby(['storage_id', 'stack_id']).agg({
-            'coal_weight_storage': 'sum',
-            'days_in_storage': 'max',
+        # 1. Агрегация поставок
+        supplies_agg = supplies.groupby(['storage_id', 'stack_id']).agg({
+            'weight_in': 'sum',
             'unload_date': 'min',
-            'cargo_code': 'first'
-        }).reset_index()
+            'coal_grade': 'first'
+        }).rename(columns={'weight_in': 'coal_weight_storage'}).reset_index()
         
-        df = temperature_df.merge(supplies_agg, on=['storage_id', 'stack_id'], how='left')
+        # 2. Основной мердж
+        df = temp.merge(supplies_agg, on=['storage_id', 'stack_id'], how='left')
         
-        # 2. Привязка Погоды
-        if not weather_df.empty:
+        # 3. Мердж погоды
+        if not weather.empty:
             df['weather_date'] = pd.to_datetime(df['measurement_date'].dt.date)
-            df = df.merge(weather_df, on='weather_date', how='left')
-        
-        # 3. УМНАЯ ПРИВЯЗКА ПОЖАРОВ (merge_asof)
+            df = df.merge(weather, on='weather_date', how='left')
+            
+        # 4. Мердж целевой переменной
         df = df.sort_values('measurement_date')
-        fires_df = fires_df.sort_values('fire_date')
+        fires = fires.sort_values('fire_date')
         
-        merged_df = pd.merge_asof(
+        merged = pd.merge_asof(
             df,
-            fires_df[['storage_id', 'stack_id', 'fire_date', 'stack_formation_date']],
-            left_on='measurement_date',
-            right_on='fire_date',
+            fires[['storage_id', 'stack_id', 'fire_date', 'stack_formation_date']],
+            left_on='measurement_date', right_on='fire_date',
             by=['storage_id', 'stack_id'],
-            direction='forward',
-            tolerance=pd.Timedelta(days=120)  # Компромисс между 90 и 180
+            direction='forward', tolerance=pd.Timedelta(days=120)
         )
         
-        merged_df['days_until_fire'] = (merged_df['fire_date'] - merged_df['measurement_date']).dt.days
+        merged['days_until_fire'] = (merged['fire_date'] - merged['measurement_date']).dt.days
         
-        if 'stack_formation_date_y' in merged_df.columns:
-             merged_df['stack_formation_date'] = merged_df['stack_formation_date_y'].fillna(merged_df['unload_date'])
+        # --- БЕЗОПАСНОЕ ОПРЕДЕЛЕНИЕ ВОЗРАСТА ---
+        
+        # 1. Ищем колонку с датой формирования
+        if 'stack_formation_date_y' in merged.columns:
+            formation_col = 'stack_formation_date_y'
+        elif 'stack_formation_date' in merged.columns:
+            formation_col = 'stack_formation_date'
         else:
-             merged_df['stack_formation_date'] = merged_df['unload_date']
-             
-        merged_df['days_since_formation'] = (merged_df['measurement_date'] - merged_df['stack_formation_date']).dt.days
+            merged['stack_formation_date_temp'] = pd.NaT
+            formation_col = 'stack_formation_date_temp'
+
+        # 2. Собираем дату: Пожары -> Поставки -> Замер
+        start_date_series = merged[formation_col].fillna(merged['unload_date'])
+        start_date_series = start_date_series.fillna(merged['measurement_date'])
         
-        print(f"✓ Всего замеров: {len(df)}")
-        print(f"✓ Замеров, привязанных к будущим пожарам: {merged_df['days_until_fire'].notna().sum()}")
+        # 3. ПРИНУДИТЕЛЬНАЯ КОНВЕРТАЦИЯ В DATETIME (FIX TYPE ERROR)
+        start_date_series = pd.to_datetime(start_date_series, errors='coerce')
+        measurement_date_series = pd.to_datetime(merged['measurement_date'], errors='coerce')
         
-        return merged_df
-    
-    def prepare_full_dataset(self) -> pd.DataFrame:
-        """Возвращает датасет для ML."""
-        df = self.merge_all_data()
+        # 4. Вычитание (теперь точно Timestamp - Timestamp)
+        merged['days_since_formation'] = (measurement_date_series - start_date_series).dt.days
         
-        # Берем только те, где есть привязка к пожару
-        df_train = df[df['days_until_fire'].notna()].copy()
+        # Заполняем возможные NaN в днях нулями (если даты были битые)
+        merged['days_since_formation'] = merged['days_since_formation'].fillna(0)
+
+        cols = [
+            'storage_id', 'stack_id', 'measurement_date', 'days_until_fire',
+            'max_temp', 'days_since_formation', 'coal_weight_storage', 'coal_grade',
+            'picket', 'shift',
+            'weather_temp', 'weather_humidity', 'weather_precipitation', 'pressure', 
+            'cloud_cover', 'visibility', 'wind_speed_avg', 'wind_speed_max', 
+            'wind_dir', 'weather_code'
+        ]
         
-        # Очистка дубликатов
-        df_train['measurement_day'] = df_train['measurement_date'].dt.date
-        
-        # ВАЖНО: Добавил 'coal_grade' в агрегацию
-        agg_dict = {
-            'max_temp': 'max',
-            'days_until_fire': 'min',
-            'days_since_formation': 'first',
-            'fire_date': 'first',
-            'coal_weight_storage': 'first',
-            'weather_temp': 'mean',
-            'weather_humidity': 'mean',
-            'wind_speed_avg': 'mean',
-            'coal_grade': 'first' 
-        }
-        
-        # Добавляем отсутствующие колонки
-        for col in agg_dict:
-            if col not in df_train.columns:
-                # Для строк ставим unknown, для чисел 0
-                if col == 'coal_grade':
-                    df_train[col] = 'unknown'
-                else:
-                    df_train[col] = 0
+        for c in cols:
+            if c not in merged.columns: merged[c] = 0
                 
-        grouped = df_train.groupby(['storage_id', 'stack_id', 'measurement_day']).agg(agg_dict).reset_index()
-        
-        # Возвращаем имя measurement_date
-        grouped = grouped.rename(columns={'measurement_day': 'measurement_date'})
-        grouped['measurement_date'] = pd.to_datetime(grouped['measurement_date'])
-        
-        return grouped
+        return merged[cols].dropna(subset=['measurement_date'])

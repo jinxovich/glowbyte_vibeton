@@ -1,4 +1,4 @@
-"""Главный класс для обучения и предсказания."""
+"""Главный класс для обучения и предсказания (v3.0 - Full Data Training)."""
 
 from __future__ import annotations
 
@@ -6,22 +6,25 @@ import json
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from datetime import datetime, timedelta
 from typing import Dict, Any, List
-from sklearn.model_selection import train_test_split
 
+# Импорты из соседних модулей
 from .data_preprocessor import DataPreprocessor
 from .feature_engineering import FeatureEngineer
 from .model import CoalFireModel
 from .metrics import evaluate_model, print_metrics_report
-
+from sklearn.model_selection import TimeSeriesSplit
 
 class CoalCombustionPredictor:
-    """Основной класс для работы с моделью прогнозирования самовозгорания."""
+    """
+    Orchestrator: Data -> Features -> Model -> Predictions.
+    Обучается на 100% доступных данных.
+    """
     
     def __init__(self, data_dir: str | Path, artifacts_dir: str | Path):
         self.data_dir = Path(data_dir)
         self.artifacts_dir = Path(artifacts_dir)
+        
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         (self.artifacts_dir / "models").mkdir(parents=True, exist_ok=True)
         
@@ -35,229 +38,149 @@ class CoalCombustionPredictor:
         if self.model_path.exists():
             try:
                 self.model.load(self.model_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ Ошибка загрузки модели: {e}")
     
     def train(self) -> Dict[str, Any]:
-        """Обучить модель."""
+        """
+        Обучение на ПОЛНОМ датасете без потери 20% данных.
+        """
         print("\n" + "="*60)
-        print("🔥 ОБУЧЕНИЕ МОДЕЛИ (ФИНАЛЬНЫЙ ЗАПУСК)")
+        print("🔥 ЗАПУСК ОБУЧЕНИЯ НА 100% ДАННЫХ")
         print("="*60)
         
         # 1. Загрузка
         raw_df = self.preprocessor.prepare_full_dataset()
-        if raw_df.empty: raise ValueError("Датасет пуст!")
+        if raw_df.empty: raise ValueError("❌ Датасет пуст!")
 
         # 2. Фичи
         full_df = self.feature_engineer.create_features(raw_df)
         
-        # 3. Фильтрация (60 дней)
-        print("\n🔪 Фильтрация обучающей выборки (0 <= дней до пожара <= 60)...")
-        train_df = full_df[
+        # 3. Фильтрация (0-60 дней до пожара)
+        print("\n🔪 Фильтрация выборки (0 <= дней до пожара <= 60)...")
+        df_model = full_df[
             (full_df['days_until_fire'] >= 0) & 
             (full_df['days_until_fire'] <= 60)
         ].copy()
         
-        if len(train_df) < 10: raise ValueError("Мало данных (<10).")
+        # Сортировка по времени обязательна
+        df_model = df_model.sort_values('measurement_date')
+        
+        if len(df_model) < 10: raise ValueError("❌ Критически мало данных (<10).")
             
-        # 4. Подготовка X и y
+        # 4. Подготовка X и y (ВСЕ ДАННЫЕ)
         feature_cols = self.feature_engineer.get_feature_columns()
-        for col in feature_cols:
-            if col not in train_df.columns: train_df[col] = 0
-        
-        X = train_df[feature_cols].fillna(0)
-        y = train_df['days_until_fire']
-        
-        print(f"  ✓ Всего строк: {len(X)}")
-        
-        # 5. СТРАТИФИЦИРОВАННОЕ РАЗДЕЛЕНИЕ
-        # Используем стратификацию по бинам days_until_fire для равномерного распределения
-        y_binned = pd.cut(y, bins=[-1, 7, 14, 30, 100], labels=[0, 1, 2, 3])
-        
-        from sklearn.model_selection import StratifiedShuffleSplit
-        splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        train_idx, test_idx = next(splitter.split(X, y_binned))
-        
-        X_train = X.iloc[train_idx]
-        X_test = X.iloc[test_idx]
-        y_train = y.iloc[train_idx]
-        y_test = y.iloc[test_idx]
-        
-        print(f"  ✓ Обучение на: {len(X_train)} строк")
-        print(f"  ✓ Тест (проверка) на: {len(X_test)} строк (стратифицированное разделение)")
-        
-        # Обучаем
-        self.model.train(X_train, y_train, cv_splits=5)
-        
-        # Проверяем
-        print("\n⚖️  ПРОВЕРКА НА ОТЛОЖЕННЫХ ДАННЫХ:")
-        y_pred_test = self.model.predict(X_test)
-        test_metrics = evaluate_model(y_test.values, y_pred_test)
-        
-        print_metrics_report(test_metrics)
-        
-        # === НОВОЕ: СОХРАНЯЕМ СРАВНЕНИЕ В CSV ===
-        comparison_df = X_test.copy()
-        comparison_df['REAL_DAYS'] = y_test.values
-        comparison_df['PREDICTED_DAYS'] = np.round(y_pred_test, 1)
-        comparison_df['ERROR'] = comparison_df['PREDICTED_DAYS'] - comparison_df['REAL_DAYS']
-        
-        # Оставляем только понятные колонки для просмотра
-        view_cols = ['storage_id_encoded', 'max_temp', 'days_since_formation', 'REAL_DAYS', 'PREDICTED_DAYS', 'ERROR']
-        
-        save_path = self.artifacts_dir / "final_comparison.csv"
-        comparison_df.to_csv(save_path, index=False)
-        print(f"💾 Файл со сравнением сохранен: {save_path}")
-        print("   (Открой его, чтобы увидеть реальные vs предсказанные даты!)")
+        for c in feature_cols:
+            if c not in df_model.columns: df_model[c] = 0
 
-        # === НОВОЕ: ПОКАЗЫВАЕМ ВАЖНОСТЬ ПРИЗНАКОВ ===
-        print("\n🔍 ТОП-10 ПРИЧИН ВОЗГОРАНИЯ (Feature Importance):")
-        imp = self.model.get_feature_importance(top_n=10)
-        print(imp.to_string(index=False))
+        X = df_model[feature_cols].fillna(0)
+        y = df_model['days_until_fire']
         
-        # 6. Сохранение модели (БЕЗ финального переобучения - используем CV модель)
-        print("\n💾 Сохранение модели (CV версия без переобучения)...")
-        # ВАЖНО: НЕ переобучаем на всех данных! Используем модель после CV
-        # Это помогает избежать overfitting
+        print(f"  🚀 Используем все данные для обучения: {len(X)} строк")
+        print(f"  📅 Период: {df_model['measurement_date'].min().date()} -> {df_model['measurement_date'].max().date()}")
+
+        # 5. Оптимизация (Optuna) на всем датасете
+        # Внутри Optuna используется Cross-Validation, так что переобучения на подборе параметров не будет
+        if hasattr(self.model, 'optimize'):
+                    try:
+                        print("\n⚙️  Подбор параметров (Optuna) - БЫСТРЫЙ РЕЖИМ...")
+                        # СТАВИМ 5 ВМЕСТО 20
+                        self.model.optimize(X, y, n_trials=5) 
+                    except Exception as e:
+                        print(f"⚠️ Ошибка Optuna: {e}")
+
+        # 6. ФИНАЛЬНОЕ ОБУЧЕНИЕ (FIT) НА 100% ДАННЫХ
+        print("\n💪 Финальное обучение модели на полном объеме...")
+        self.model.train_final(X, y)
+        
+        # 7. Оценка (Self-Check)
+        # Так как мы обучились на всем, смотрим метрики на том же train-сете.
+        # Это покажет, насколько хорошо модель "выучила уроки".
+        print("\n📊 МЕТРИКИ (TRAINING SCORE - Насколько хорошо модель запомнила данные):")
+        y_pred = self.model.predict(X)
+        metrics = evaluate_model(y.values, y_pred)
+        
+        print_metrics_report(metrics)
+        
+        # 8. Попытка достать важность признаков
+        print("\n🔍 ТОП-10 ПРИЗНАКОВ (Feature Importance):")
+        try:
+            # Пытаемся достать из XGBoost напрямую
+            booster = self.model.model
+            if hasattr(booster, 'feature_importances_'):
+                imps = booster.feature_importances_
+                feats = feature_cols
+                fi_df = pd.DataFrame({'feature': feats, 'importance': imps})
+                print(fi_df.sort_values('importance', ascending=False).head(10).to_string(index=False))
+            else:
+                print("  (Не поддерживается текущей версией модели)")
+        except Exception as e:
+            print(f"  (Ошибка получения важности: {e})")
+
+        # 9. Сохранение
+        print(f"\n💾 Сохранение модели в {self.model_path}...")
         self.model.save(self.model_path)
-        self._save_metrics(test_metrics)
+        self._save_metrics(metrics)
         
-        return test_metrics
+        return metrics
     
     def predict(self, input_df: pd.DataFrame) -> List[Dict[str, Any]]:
-        if not self.model_path.exists(): raise FileNotFoundError("Модель не обучена!")
+        """Инференс."""
+        if not self.model_path.exists(): raise FileNotFoundError("❌ Модель не обучена!")
         df = input_df.copy()
+        
         rename_map = {'max_temperature': 'max_temp', 'pile_age_days': 'days_since_formation', 'stack_mass_tons': 'coal_weight'}
         df = df.rename(columns=rename_map)
         
-        # 🛡️ ВАЛИДАЦИЯ ТЕМПЕРАТУРЫ
-        if 'max_temp' in df.columns:
-            # Проверяем аномальные значения
-            temp_warnings = []
-            for idx, temp in enumerate(df['max_temp']):
-                if temp < 10:
-                    temp_warnings.append(f"⚠️ Строка {idx}: Температура {temp}°C слишком низкая (ниже 10°C). Возможно ошибка измерения.")
-                    # Заменяем на медианное значение из обучающих данных (~30°C)
-                    df.loc[df.index[idx], 'max_temp'] = 30.0
-                elif temp > 100:
-                    temp_warnings.append(f"⚠️ Строка {idx}: Температура {temp}°C подозрительно высокая. Проверьте датчик!")
+        # Заглушки для отсутствующих данных
+        defaults = {'days_since_formation': 0, 'weather_temp': 10, 'weather_humidity': 70, 'wind_speed_avg': 3, 'coal_weight': 5000}
+        for c, v in defaults.items():
+            if c not in df.columns: df[c] = v
             
-            if temp_warnings:
-                for warning in temp_warnings:
-                    print(warning)
-        
-        if 'days_since_formation' not in df.columns: df['days_since_formation'] = 0
-        for col in ['weather_temp', 'weather_humidity', 'wind_speed_avg', 'coal_weight']:
-            if col not in df.columns: df[col] = 0
-        
-        # 🔥 ВАЖНО: При inference создаем реалистичные значения для топ-признаков
-        # Иначе модель будет игнорировать температуру!
-        
-        # 1. cumulative_high_temp_days - аппроксимируем по текущей температуре и возрасту
-        if 'max_temp' in df.columns:
-            # Если температура высокая и штабель старый → много дней с высокой температурой
-            df['cumulative_high_temp_days'] = np.where(
-                df['max_temp'] > 40,
-                df['days_since_formation'] * 0.3,  # ~30% времени температура была высокой
-                df['days_since_formation'] * 0.05  # ~5% времени
-            )
-            
-            # 2. high_temp_days_7d - дней с высокой температурой за последние 7 дней
-            df['high_temp_days_7d'] = np.where(
-                df['max_temp'] > 40,
-                np.minimum(7, df['days_since_formation']),  # Все 7 дней или меньше
-                0
-            )
-            
-            # 3. stack_max_temp_ever - максимальная температура = текущая (консервативная оценка)
-            df['stack_max_temp_ever'] = df['max_temp']
-            
-            # 4. high_temp_indicator
-            df['high_temp_indicator'] = (df['max_temp'] > 40).astype(int)
-            
-            # 5. extreme_temp_indicator
-            df['extreme_temp_indicator'] = (df['max_temp'] > 60).astype(int)
-            
-            # 6. critical_temp_indicator, danger_zone_indicator
-            df['critical_temp_indicator'] = (df['max_temp'] > 70).astype(int)
-            df['danger_zone_indicator'] = ((df['max_temp'] > 50) & (df['max_temp'] <= 70)).astype(int)
-        
-        df['temp_growth_rate'] = 0 
-        df['thermal_stress_index'] = df['max_temp'] * (1 - df.get('weather_humidity', 50)/200)
-        
+        df_features = self.feature_engineer.create_features(df)
         feature_cols = self.feature_engineer.get_feature_columns()
-        for col in feature_cols:
-            if col not in df.columns: df[col] = 0
-        X = df[feature_cols].fillna(0)
-        
-        # Используем умное предсказание с защитой
-        preds = self.predict_with_confidence(X)
+        for c in feature_cols:
+            if c not in df_features.columns: df_features[c] = 0
+            
+        X = df_features[feature_cols].fillna(0)
+        preds_df = self.predict_with_confidence(X)
         
         results = []
         for i, row in df.iterrows():
-            p_days = preds.iloc[i]['predicted_days']
             results.append({
-                'storage_id': str(row.get('storage_id', '')),
-                'stack_id': str(row.get('stack_id', '')),
-                'predicted_ttf_days': float(p_days),
-                'risk_level': str(preds.iloc[i]['risk_level']),
-                'confidence': float(preds.iloc[i]['confidence'])
+                'storage_id': str(row.get('storage_id', 'unknown')),
+                'stack_id': str(row.get('stack_id', 'unknown')),
+                'predicted_ttf_days': float(preds_df.iloc[i]['predicted_days']),
+                'risk_level': str(preds_df.iloc[i]['risk_level']),
+                'confidence': float(preds_df.iloc[i]['confidence'])
             })
         return results
 
     def predict_with_confidence(self, X: pd.DataFrame) -> pd.DataFrame:
-        """
-        Предсказать с оценкой уверенности (БЕЗ принудительных override).
-        Доверяем модели - она обучена на реальных данных!
-        """
-        # 1. Получаем предсказание от модели
         predictions = self.model.predict(X)
-        
-        # Обрезаем только отрицательные значения
         predictions = np.maximum(predictions, 0)
         
-        preds_series = pd.Series(predictions)
-        
-        # 2. Уверенность зависит от температуры (физический смысл)
+        # Расчет уверенности от температуры (физика)
         if 'max_temp' in X.columns:
-            max_temps = X['max_temp'].reset_index(drop=True)
-            
-            # Чем выше температура, тем выше уверенность
-            # Логистическая функция от температуры
-            confidence_series = 1 / (1 + np.exp(-(max_temps - 40) / 10))
-            # При 40°C: confidence ~0.5
-            # При 60°C: confidence ~0.88
-            # При 20°C: confidence ~0.12
-            
-            # Минимальная уверенность 10%, максимальная 95%
-            confidence_series = np.clip(confidence_series, 0.1, 0.95)
+            temps = X['max_temp'].reset_index(drop=True)
+            confidence = 1 / (1 + np.exp(-(temps - 45) / 10))
+            confidence = 0.4 + (confidence * 0.55)
         else:
-            # Если нет температуры, уверенность зависит от предсказания
-            confidence_series = pd.Series(1 / (1 + preds_series / 20))
-
-        # 3. Рассчитываем уровни риска
+            confidence = pd.Series([0.7] * len(predictions))
+            
         risk_level = pd.cut(
-            preds_series,
-            bins=[-1, 3, 7, 14, 30, 1000],
+            predictions,
+            bins=[-1, 7, 14, 30, 60, 10000],
             labels=['критический', 'высокий', 'средний', 'низкий', 'минимальный']
         )
-        
-        return pd.DataFrame({
-            'predicted_days': preds_series,
-            'confidence': confidence_series,
-            'risk_level': risk_level
-        })
+        return pd.DataFrame({'predicted_days': predictions, 'confidence': confidence, 'risk_level': risk_level})
 
     def _save_metrics(self, metrics: Dict[str, Any]) -> None:
         def sanitize(obj):
-            if isinstance(obj, dict): return {k: sanitize(v) for k, v in obj.items()}
-            elif isinstance(obj, list): return [sanitize(v) for v in obj]
-            elif isinstance(obj, np.integer): return int(obj)
-            elif isinstance(obj, np.floating): return float(obj)
+            if isinstance(obj, (np.integer, int)): return int(obj)
+            elif isinstance(obj, (np.floating, float)): return float(obj)
             elif isinstance(obj, np.ndarray): return sanitize(obj.tolist())
-            elif isinstance(obj, np.bool_): return bool(obj)
-            elif pd.isna(obj): return None
-            else: return obj
-        clean_metrics = sanitize(metrics)
+            elif isinstance(obj, dict): return {k: sanitize(v) for k, v in obj.items()}
+            return str(obj)
         with open(self.metrics_path, 'w', encoding='utf-8') as f:
-            json.dump(clean_metrics, f, indent=2, ensure_ascii=False)
+            json.dump(sanitize(metrics), f, indent=2, ensure_ascii=False)
