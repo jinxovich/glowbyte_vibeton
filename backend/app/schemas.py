@@ -1,6 +1,27 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List
 from datetime import datetime
+from .models import UserRole, UserStatus
+
+# --- USER ---
+class UserBase(BaseModel):
+    email: EmailStr
+    full_name: str
+
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+    role: str
+    status: str
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
 
 # --- PREDICTION ---
 

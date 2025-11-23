@@ -28,4 +28,14 @@ app.include_router(prediction.router)
 
 @app.get("/")
 def root():
-    return {"message": "Coal Fire Prediction API is running 🔥"}
+    return {
+        "message": "Coal Fire Prediction API is running 🔥",
+        "endpoints": {
+            "docs": "/docs",
+            "register": "/auth/register",
+            "login": "/token",
+            "predict": "/predict/",
+            "dashboard": "/predict/dashboard",
+            "history": "/predict/history"
+        }
+    }
